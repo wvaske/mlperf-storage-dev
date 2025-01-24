@@ -15,7 +15,7 @@ TENSORFLOW = "tensorflow"
 HUGGINGFACE = "huggingface"
 DLIO = "dlio"
 
-FRAMEWORK="framework"
+FRAMEWORK = "framework"
 SUPPORTED_FRAMEWORKS = [PYTORCH, TENSORFLOW, HUGGINGFACE, DLIO]
 
 
@@ -23,7 +23,7 @@ def parse_arguments():
     parser = argparse.ArgumentParser(description="Tool to run various checkpointing processes")
     parser.add_argument('--framework', type=str, default="dlio", help="Framework to use for checkpointing.")
     parser.add_argument('--checkpoint-location', type=str, default="/tmp", help="Path for checkpoints")
-    parser.add_argument('--model', type=str, default="llama3-70b")
+    parser.add_argument('--model', type=str, default="llama3-405b")
 
     parser.add_argument('--logfile-path', type=str, default="./checkpoint.log")
     return {k: v for k, v in vars(parser.parse_args()).items() if v is not None}
@@ -63,34 +63,59 @@ class DLIOCheckpointRPCServer:
         self.dlio_args.configure_dlio_logging(is_child=False)
         self.dlio_args.checkpoint_folder = checkpoint_location
 
-        if model == "megatron":
-            self.dlio_args.optimization_groups = [1_009_254_400, 865_075_200, 793_600]
-            self.dlio_args.optimization_groups = [1_009_254, 865_075, 793]
-            self.dlio_args.num_layers = 44
-            # self.dlio_args.layer_parameters = [129_761_280, 20_971_520]
-            # self.dlio_args.layer_parameters = [32_440_320, 5_242_880]
-            self.dlio_args.layer_parameters = [16_220_160, 2_621_440]
-            self.dlio_args.layer_parameters = [1_622_016, 262_144]
-            self.dlio_args.model_size = 30102
+        if model == "llama3-7b":
+            # MLPerf Users can modify:
+            #  - Number of processes = 8 or PP x TP
+            # Data Parallel Ranks:
+            #  - 1 only?
+            #  - Enable as scaling parameter?
+            self.dlio_args.num_layers = 80
+            self.dlio_args.model_size = 8192
+            self.dlio_args.optimization_groups = [3_164_062_5, 3_164_062_5]
+
+            # 405_000_000_000 / 126 / 16 = (per layer per rank)
+            self.dlio_args.layer_parameters = [200_892_8]
             self.dlio_args.checkpoint_type = CheckpointLocationType.ALL_RANKS
-            self.dlio_args.pipeline_parallelism = 2
-            self.dlio_args.tensor_parallelism = 4
+            self.dlio_args.pipeline_parallelism = 4  # 4x8 = 32 ranks in each data parallel
+            self.dlio_args.tensor_parallelism = 8
+
+        elif model == "llama3-70b":
+            # MLPerf Users can modify:
+            #  - Number of processes = 8 or PP x TP
+            # Data Parallel Ranks:
+            #  - 1 only?
+            #  - Enable as scaling parameter?
+            self.dlio_args.num_layers = 80
+            self.dlio_args.model_size = 8192
+            self.dlio_args.optimization_groups = [3_164_062_50, 3_164_062_50]
+
+            # 405_000_000_000 / 126 / 16 = (per layer per rank)
+            self.dlio_args.layer_parameters = [200_892_85]
+            self.dlio_args.checkpoint_type = CheckpointLocationType.ALL_RANKS
+            self.dlio_args.pipeline_parallelism = 4  # 4x8 = 32 ranks in each data parallel
+            self.dlio_args.tensor_parallelism = 8
+
         elif model == "llama3-405b":
-            self.dlio_args.num_layers = 80
+            self.dlio_args.num_layers = 126
             self.dlio_args.model_size = 16384
-            self.dlio_args.optimization_groups = [1_009_254_400, 865_075_200, 793_600]
-            self.dlio_args.layer_parameters = [4_358_152_160, 704_347_824]
+
+            # 405_000_000_000  / (16 * 8) = (num optimizer params per GPU, 2x = number of moments)
+            self.dlio_args.optimization_groups = [3_164_062_500, 3_164_062_500]
+
+            # 405_000_000_000 / 126 / 16 = (per layer per rank)
+            self.dlio_args.layer_parameters = [200_892_857]
             self.dlio_args.checkpoint_type = CheckpointLocationType.ALL_RANKS
-            self.dlio_args.pipeline_parallelism = 2
-            self.dlio_args.tensor_parallelism = 4
-        elif model == "llama3-7b":
-            self.dlio_args.num_layers = 80
-            self.dlio_args.model_size = 16384
-            self.dlio_args.optimization_groups = [1_009_254_4, 865_075_2, 793_6]
-            self.dlio_args.layer_parameters = [4_358_152_1, 704_347_8]
+            self.dlio_args.pipeline_parallelism = 16  # 8x16 = 128 ranks in each data parallel
+            self.dlio_args.tensor_parallelism = 8
+
+        elif model == "llama3-1t":
+            self.dlio_args.num_layers = 128
+            self.dlio_args.model_size = 25600
+            self.dlio_args.optimization_groups = [1_009_254_400, 865_075_200]
+            self.dlio_args.layer_parameters = [4_358_152_100, 704_347_800]
             self.dlio_args.checkpoint_type = CheckpointLocationType.ALL_RANKS
-            self.dlio_args.pipeline_parallelism = 2
-            self.dlio_args.tensor_parallelism = 4
+            self.dlio_args.pipeline_parallelism = 64  # 8x64 = 512 ranks in each data parallel
+            self.dlio_args.tensor_parallelism = 8
 
         self.comm.Barrier()
         self.checkpoint_mechanism = CheckpointingFactory.get_mechanism(CheckpointMechanismType.PT_SAVE)
@@ -151,8 +176,7 @@ class DLIOCheckpointRPCServer:
         if self.my_rank == 0:
             logging.info(f'METRIC - Checkpoint Times: {self.checkpoint_times}')
             logging.info(f'METRIC - Average checkpoint time: {statistics.mean(self.checkpoint_times):.2f}')
-            logging.info(
-                f'METRIC - Min & Max checkpoint times: {min(self.checkpoint_times):.2f}, {max(self.checkpoint_times):.2f}')
+            logging.info(f'METRIC - Min & Max checkpoint times: {min(self.checkpoint_times):.2f}, {max(self.checkpoint_times):.2f}')
             logging.info(f'METRIC - StDev of checkpoint times: {statistics.pstdev(self.checkpoint_times):.2f}')
 
 

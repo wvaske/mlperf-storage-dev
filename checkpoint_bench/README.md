@@ -8,6 +8,10 @@ Each checkpoint clocks in around 440GB and is made up of 352 files. The files re
 ## Installation
 Install DLIO from here: https://github.com/wvaske/dlio_benchmark
 Be sure to do "pip install -r requirements" and "pip install dlio_benchmark"
+You likely need python3.9-dev installed to compile the mpi4py package
+Remove PyYAML from setup.py and requirements.txt if you already have a version installed
+
+Checkout the branch 'bugfix/checkpointing' (until this is merged into main)
 
 Install an appropriate MPI library with mpirun
 
